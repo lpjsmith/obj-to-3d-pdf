@@ -1,5 +1,33 @@
-# pip install pymeshlab, confirmed version 2022.2.post3
-# pip install opencv-python, confirmed version 4.7.0.68
+
+# ============================================
+# 3DMD → 3D PDF PIPELINE
+# Dependencies (tested & stable versions)
+#
+# IMPORTANT: OpenCV 4.7 requires NumPy < 2.0.
+# WSL/Conda fix:
+#   pip uninstall -y numpy opencv-python opencv-contrib-python
+#   pip install "numpy==1.26.4"
+#   pip install "opencv-python==4.7.0.72"
+#
+# Also recommended:
+#   rm -rf ~/.local/lib/python3.10/site-packages/cv2
+#   (removes conflicting cv2 outside conda env)
+#
+# Required packages:
+#   numpy==1.26.4
+#   opencv-python==4.7.0.72
+#   pymeshlab==2022.2.post3
+#
+# Conda environment:
+#   python 3.10 or 3.11
+#
+# Latex requirements (Windows):
+#   MiKTeX OR TeXLive
+#   media9 package installed (for 3D PDF embedding)
+#   pdflatex accessible from PATH
+#
+# ============================================
+
 
 import os
 import shutil
@@ -111,5 +139,6 @@ for week in week_folders[0:]:
             os.remove(f"{jpeg_destination_path[:-10]}tex")
             
             print(f"{frame}: cleanup done")
+
 
 
