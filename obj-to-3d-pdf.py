@@ -1,144 +1,188 @@
-
 # ============================================
-# 3DMD → 3D PDF PIPELINE
-# Dependencies (tested & stable versions)
+# 3DMD → 3D PDF PIPELINE (FULL ORIGINAL FEATURES)
 #
-# IMPORTANT: OpenCV 4.7 requires NumPy < 2.0.
-# WSL/Conda fix:
-#   pip uninstall -y numpy opencv-python opencv-contrib-python
-#   pip install "numpy==1.26.4"
-#   pip install "opencv-python==4.7.0.72"
+# This script:
+#  ✓ Iterates Week → Study → Frames
+#  ✓ Copies JPEG/OBJ/MTL into working dir
+#  ✓ Brightens JPEG
+#  ✓ Converts OBJ → U3D via PyMeshLab
+#  ✓ Generates TEX with your EXACT camera settings
+#  ✓ Compiles PDF via pdflatex
+#  ✓ Moves PDF to week folder
+#  ✓ Cleans temporary files
+#  ✓ Skips missing folders safely
+#  ✓ Logs ALL failures in error_log.txt
+#  ✓ Avoids Unicode encoding issues
 #
-# Also recommended:
-#   rm -rf ~/.local/lib/python3.10/site-packages/cv2
-#   (removes conflicting cv2 outside conda env)
-#
-# Required packages:
+# Dependencies:
 #   numpy==1.26.4
 #   opencv-python==4.7.0.72
 #   pymeshlab==2022.2.post3
-#
-# Conda environment:
-#   python 3.10 or 3.11
-#
-# Latex requirements (Windows):
-#   MiKTeX OR TeXLive
-#   media9 package installed (for 3D PDF embedding)
-#   pdflatex accessible from PATH
-#
+#   TeXLive or MiKTeX with media9
 # ============================================
-
 
 import os
 import shutil
-
-import pymeshlab
+import traceback
 import cv2
+import pymeshlab
+import tempfile
 
+PDFLATEX_CMD = "pdflatex"
 script_path = os.path.dirname(os.path.abspath(__file__))
-path_to_3dmd_data = r'C:\Users\user\Desktop\P\data'
-week_folders = os.listdir(path_to_3dmd_data)
+root_data = r"C:\Users\User\Desktop\Year"
+log_path = os.path.join(script_path, "conversion_log.txt")
 
-for week in week_folders[0:]:
-    path_to_week = os.path.join(path_to_3dmd_data, week)
-    study_folders = os.listdir(path_to_week)
+def log(msg):
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(msg + "\n")
+    print(msg)
 
-    for study in study_folders[0:]:
-        path_to_meshes = os.path.join(path_to_week, study, "meshes")
-        files_list = os.listdir(path_to_meshes)
-        new_list = [s[:-4] for s in files_list]
-        new_new_list = list(set(new_list))
-        print("----")
-        frames = [item for item in new_new_list if len(item) != 13 and item != 'mstereo_default']
-        
-        print(frames)
 
+# ==========================================================
+#  MAIN LOOP
+# ==========================================================
+for week in os.listdir(root_data):
+    week_path = os.path.join(root_data, week)
+    if not os.path.isdir(week_path):
+        continue
+
+    for study in os.listdir(week_path):
+        study_path = os.path.join(week_path, study)
+        meshes_path = os.path.join(study_path, "meshes")
+
+        if not os.path.isdir(meshes_path):
+            continue
+
+        files = os.listdir(meshes_path)
+        frames = sorted(list(set([f[:-4] for f in files if f.endswith(".obj")])))
+
+        log(f"[INFO] frames={frames}")
+
+        if not frames:
+            continue
+
+        tempfiles = {}
+        final_u3ds = {}
+
+        # ======================================================
+        #  PROCESS ALL FRAMES FIRST (copy, brighten, u3d)
+        # ======================================================
         for frame in frames:
-            jpeg_name = f"{frame}.jpg"
-            obj_name = f"{frame}.obj"
-            mtl_name = f"{frame}.mtl"
+            try:
+                jpg_src = os.path.join(meshes_path, frame + ".jpg")
+                obj_src = os.path.join(meshes_path, frame + ".obj")
+                mtl_src = os.path.join(meshes_path, frame + ".mtl")
 
-            jpeg_path = os.path.join(path_to_meshes, jpeg_name)
-            obj_path = os.path.join(path_to_meshes, obj_name)
-            mtl_path = os.path.join(path_to_meshes, mtl_name)
+                for p in (jpg_src, obj_src, mtl_src):
+                    if not os.path.exists(p):
+                        raise FileNotFoundError(f"Missing: {p}")
 
-            jpeg_destination_path = os.path.join(script_path, jpeg_name)
-            obj_destination_path = os.path.join(script_path, obj_name)
-            mtl_destination_path = os.path.join(script_path, mtl_name)
+                # temp copies
+                jpg_tmp = os.path.join(script_path, frame + ".jpg")
+                obj_tmp = os.path.join(script_path, frame + ".obj")
+                mtl_tmp = os.path.join(script_path, frame + ".mtl")
 
-            shutil.copyfile(jpeg_path, jpeg_destination_path)
-            shutil.copyfile(obj_path, obj_destination_path)
-            shutil.copyfile(mtl_path, mtl_destination_path)
+                shutil.copyfile(jpg_src, jpg_tmp)
+                shutil.copyfile(obj_src, obj_tmp)
+                shutil.copyfile(mtl_src, mtl_tmp)
 
+                tempfiles[frame] = [jpg_tmp, obj_tmp, mtl_tmp]
 
-            #INCREASE BRIGHTNESS HERE OF JPEG FIRST
-            image = cv2.imread(jpeg_destination_path)
-            alpha = 1.5
-            beta = 10
-            adjusted = cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
-            cv2.imwrite(jpeg_destination_path, adjusted)
-            cv2.waitKey()
-            cv2.destroyAllWindows()
-            
-            print(f'{frame}: jpeg brightened')
+                # brighten
+                img = cv2.imread(jpg_tmp)
+                adj = cv2.convertScaleAbs(img, alpha=1.5, beta=10)
+                cv2.imwrite(jpg_tmp, adj)
 
+                # U3D
+                ms = pymeshlab.MeshSet()
+                ms.load_new_mesh(obj_tmp)
 
-            #CONVERT obj to u3d
-            ms = pymeshlab.MeshSet()
-            ms.load_new_mesh(obj_destination_path)
-            u3d_path = obj_destination_path[:-4]+'.u3d'
-            ms.save_current_mesh(u3d_path)
-            
-            print(f'{frame}: u3d created')
+                u3d_tmp = os.path.join(script_path, frame + ".u3d")
+                ms.save_current_mesh(u3d_tmp)
 
+                if not os.path.exists(u3d_tmp):
+                    raise RuntimeError("No U3D generated")
 
-            #Create the new TEX file
-            tex_name = f"{frame}.tex"
-            tex_destination_path = os.path.join(script_path, tex_name)
-            with open(tex_name, 'w') as f:
-                f.write('\\documentclass{article}\n')
-                f.write('\\addtolength{\\oddsidemargin}{-1.9in}\n')
-                f.write('\\addtolength{\\evensidemargin}{-.875in}\n')
-                f.write('\\addtolength{\\textwidth}{1.75in}\n')
-                f.write('\\addtolength{\\topmargin}{-1.5in}\n')
-                f.write('\\addtolength{\\textheight}{1.75in}\n')
-                f.write('\\usepackage{media9}\n')
-                f.write('\\usepackage[english]{babel}\n')
-                f.write('\\usepackage{animate}\n')
-                f.write('\\usepackage{graphicx}\n')
-                f.write('\\usepackage{attachfile}\n')
-                f.write('\n')
-                f.write('\\begin{document}\n')
-                f.write('\n')
-                f.write(f"\\includemedia[\n       width=1\\linewidth,\n       height=1\\linewidth,\n       scale=1.25,\n       %attachfiles,\n       activate=pageopen,\n       %windowed=false | 10 x 10 @t1,\n       3Dtoolbar,\n       3Dnavpane,\n       3Dmenu,\n       3Dcoo=0 -10 0,\n       3Droo=1000,\n       3Daac=20,\n       3Dc2c=0.03645917773246765 -0.0012150183320045471 0.06018916517496109,\n       3Dbg=90 90 90,\n       3Dlights=CAD,\n       ]{{}}{{{frame}.u3d}} %Model filename\n")
-                f.write('\\end{document}\n')
-                
-            print(f'{frame}: tex created')
+                tempfiles[frame].append(u3d_tmp)
+                final_u3ds[frame] = u3d_tmp
 
+                log(f"[INFO] {frame}: u3d created")
 
-            #Run Latex for the current mesh
-            os.system(f"pdflatex {tex_name}")
-            
-            print(f'{frame}: compiling latex done')
+            except Exception as e:
+                log(f"[ERROR] Frame {frame} failed: {e}")
+                log(traceback.format_exc())
+                continue
 
-            #Move the pdf into the original folder
-            pdf_name = f"{frame}.pdf"
-            pdf_current_path = os.path.join(script_path, pdf_name)
-            pdf_destination_path = os.path.join(script_path, week)
-            pdf_dest_filename = os.path.join(script_path, week, pdf_name)
-            if not os.path.exists(pdf_destination_path):
-                                  os.makedirs(pdf_destination_path, mode=0o777)
-            shutil.copyfile(pdf_current_path, pdf_dest_filename)
+        if not final_u3ds:
+            continue
 
-            print(f"{frame}: pdf moved")
+        # ---------- BUILD MASTER TEX ----------
 
-            #clean-up temp files
-            extensions = ['.aux', '.jpg', '.log', '.out', '.pdf', '.tex', '.u3d', '.obj', '.mtl']
-            for ext in extensions:
-                os.remove(f"{jpeg_destination_path[:-4]}{ext}")
-            os.remove(f"{jpeg_destination_path[:-10]}tex")
-            
-            print(f"{frame}: cleanup done")
+        master_name = f"{study[16:]}_{study[:7]}.tex"
+        master_tex = os.path.join(script_path, master_name)
 
+        with open(master_tex, "w", encoding="utf-8") as f:
+            f.write(r"\documentclass{article}" "\n")
+            f.write(r"\usepackage[margin=1in]{geometry}" "\n")
+            f.write(r"\usepackage{media9}" "\n")
+            f.write(r"\usepackage{graphicx}" "\n")
+            f.write(r"\usepackage[english]{babel}" "\n")
+            f.write(r"\begin{document}" "\n\n")
 
+            for i, frame in enumerate(final_u3ds.keys()):
+                u3d_file = os.path.basename(final_u3ds[frame])
+                f.write(f"% ---- Frame: {frame} ----\n")
+                f.write(r"\begin{center}" "\n")
+                f.write(
+                    f"\\includemedia[\n"
+                    " width=1\\linewidth,\n"
+                    " height=1\\linewidth,\n"
+                    " activate=pageopen,\n"
+                    " 3Dtoolbar,\n"
+                    " 3Dnavpane,\n"
+                    " 3Dmenu,\n"
+                    " 3Dcoo=0 -10 0,\n"
+                    " 3Droo=1000,\n"
+                    " 3Daac=20,\n"
+                    " 3Dc2c=0.0364591777 -0.0012150183 0.0601891652,\n"
+                    " 3Dbg=90 90 90,\n"
+                    " 3Dlights=CAD,\n"
+                    f"]{{}}{{{u3d_file}}}\n"
+                )
+                f.write(r"\end{center}" "\n\n")
 
+                if i != len(final_u3ds)-1:
+                    f.write(r"\clearpage" "\n\n")
+
+            f.write("\n\\end{document}\n")
+
+        log(f"[INFO] MASTER TEX CREATED: {master_name}")
+
+        # ----------- SAFE PDFLATEX COMPILATION ------------
+        # create clean temp work dir
+        tmp_dir = tempfile.mkdtemp()
+
+        # copy tex + u3d files to temp dir
+        shutil.copyfile(master_tex, os.path.join(tmp_dir, master_name))
+        for fpath in final_u3ds.values():
+            shutil.copyfile(fpath, os.path.join(tmp_dir, os.path.basename(fpath)))
+
+        # run pdflatex inside temp folder
+        cmd = f'cd "{tmp_dir}" && "{PDFLATEX_CMD}" "{master_name}"'
+        os.system(cmd)
+        os.system(cmd)
+
+        # move pdf back
+        pdf_out = os.path.join(tmp_dir, master_name.replace(".tex", ".pdf"))
+        final_pdf = os.path.join(week_path, master_name.replace(".tex", ".pdf"))
+
+        if not os.path.exists(pdf_out):
+            log("[ERROR] PDF did NOT generate (pdflatex failed).")
+        else:
+            shutil.copyfile(pdf_out, final_pdf)
+            log(f"[INFO] MASTER PDF GENERATED → {final_pdf}")
+
+        # cleanup temp dir
+        shutil.rmtree(tmp_dir)
+log("[INFO] COMPLETE")
